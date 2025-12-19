@@ -491,7 +491,10 @@ mod tests {
         // Arithmetic expressions should now return a BinaryExpr with Plus operator
         assert!(s.contains("BinaryExpr"), "Should be a BinaryExpr");
         assert!(s.contains("Plus"), "Should contain Plus operator");
-        assert!(s.contains("p__age"), "Should contain the left operand column");
+        assert!(
+            s.contains("p__age"),
+            "Should contain the left operand column"
+        );
     }
 
     #[test]
