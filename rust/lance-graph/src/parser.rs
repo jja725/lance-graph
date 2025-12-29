@@ -341,6 +341,18 @@ fn comparison_expression(input: &str) -> IResult<&str, BooleanExpression> {
             },
         ));
     }
+    // Match ILIKE pattern (case-insensitive LIKE)
+    if let Ok((input_after_ilike, (_, _, pattern))) =
+        tuple((tag_no_case("ILIKE"), multispace0, string_literal))(input)
+    {
+        return Ok((
+            input_after_ilike,
+            BooleanExpression::ILike {
+                expression: left,
+                pattern,
+            },
+        ));
+    }
     // Match CONTAINS substring
     if let Ok((input_after_contains, (_, _, substring))) =
         tuple((tag_no_case("CONTAINS"), multispace0, string_literal))(input)
@@ -1263,6 +1275,124 @@ mod tests {
                 }
             }
             _ => panic!("Expected AND expression"),
+        }
+    }
+
+    #[test]
+    fn test_parse_ilike_pattern() {
+        let query = "MATCH (n:Person) WHERE n.name ILIKE 'alice%' RETURN n.name";
+        let result = parse_cypher_query(query);
+        assert!(result.is_ok(), "ILIKE pattern should parse successfully");
+
+        let ast = result.unwrap();
+        let where_clause = ast.where_clause.expect("Expected WHERE clause");
+
+        match where_clause.expression {
+            BooleanExpression::ILike {
+                expression,
+                pattern,
+            } => {
+                match expression {
+                    ValueExpression::Property(prop) => {
+                        assert_eq!(prop.variable, "n");
+                        assert_eq!(prop.property, "name");
+                    }
+                    _ => panic!("Expected property expression"),
+                }
+                assert_eq!(pattern, "alice%");
+            }
+            _ => panic!("Expected ILIKE expression"),
+        }
+    }
+
+    #[test]
+    fn test_parse_ilike_case_insensitive_keyword() {
+        // Test that the ILIKE keyword itself is case-insensitive
+        let query = "MATCH (n:Person) WHERE n.name ilike 'ALICE%' RETURN n.name";
+        let result = parse_cypher_query(query);
+        assert!(result.is_ok(), "ilike (lowercase) should parse");
+
+        match &result.unwrap().where_clause.unwrap().expression {
+            BooleanExpression::ILike { pattern, .. } => {
+                assert_eq!(pattern, "ALICE%");
+            }
+            _ => panic!("Expected ILIKE expression"),
+        }
+    }
+
+    #[test]
+    fn test_parse_ilike_with_double_quotes() {
+        let query = r#"MATCH (n:Person) WHERE n.email ILIKE "%@EXAMPLE.COM" RETURN n.email"#;
+        let result = parse_cypher_query(query);
+        assert!(result.is_ok(), "ILIKE with double quotes should parse");
+
+        let ast = result.unwrap();
+        let where_clause = ast.where_clause.expect("Expected WHERE clause");
+
+        match where_clause.expression {
+            BooleanExpression::ILike { pattern, .. } => {
+                assert_eq!(pattern, "%@EXAMPLE.COM");
+            }
+            _ => panic!("Expected ILIKE expression"),
+        }
+    }
+
+    #[test]
+    fn test_parse_ilike_in_complex_where() {
+        let query = "MATCH (n:Person) WHERE n.age > 20 AND n.name ILIKE 'j%' RETURN n.name";
+        let result = parse_cypher_query(query);
+        assert!(result.is_ok(), "ILIKE in complex WHERE should parse");
+
+        let ast = result.unwrap();
+        let where_clause = ast.where_clause.expect("Expected WHERE clause");
+
+        match where_clause.expression {
+            BooleanExpression::And(left, right) => {
+                // Left should be age > 20
+                match *left {
+                    BooleanExpression::Comparison { .. } => {}
+                    _ => panic!("Expected comparison on left"),
+                }
+                // Right should be ILIKE
+                match *right {
+                    BooleanExpression::ILike { pattern, .. } => {
+                        assert_eq!(pattern, "j%");
+                    }
+                    _ => panic!("Expected ILIKE expression on right"),
+                }
+            }
+            _ => panic!("Expected AND expression"),
+        }
+    }
+
+    #[test]
+    fn test_parse_like_and_ilike_together() {
+        let query =
+            "MATCH (n:Person) WHERE n.name LIKE 'Alice%' OR n.name ILIKE 'bob%' RETURN n.name";
+        let result = parse_cypher_query(query);
+        assert!(result.is_ok(), "LIKE and ILIKE together should parse");
+
+        let ast = result.unwrap();
+        let where_clause = ast.where_clause.expect("Expected WHERE clause");
+
+        match where_clause.expression {
+            BooleanExpression::Or(left, right) => {
+                // Left should be LIKE (case-sensitive)
+                match *left {
+                    BooleanExpression::Like { pattern, .. } => {
+                        assert_eq!(pattern, "Alice%");
+                    }
+                    _ => panic!("Expected LIKE expression on left"),
+                }
+                // Right should be ILIKE (case-insensitive)
+                match *right {
+                    BooleanExpression::ILike { pattern, .. } => {
+                        assert_eq!(pattern, "bob%");
+                    }
+                    _ => panic!("Expected ILIKE expression on right"),
+                }
+            }
+            _ => panic!("Expected OR expression"),
         }
     }
 }
