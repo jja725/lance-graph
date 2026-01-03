@@ -10,10 +10,34 @@ use std::sync::Arc;
 use arrow_schema::{Schema, SchemaRef};
 use datafusion::logical_expr::TableSource;
 
+use crate::config::{NodeMapping, RelationshipMapping};
+
 /// A minimal catalog to resolve node labels and relationship types to logical table sources.
+///
+/// This trait also provides optional methods for retrieving node and relationship mappings,
+/// allowing catalog implementations to serve as the source of schema metadata.
 pub trait GraphSourceCatalog: Send + Sync {
+    /// Get the table source for a node label.
     fn node_source(&self, label: &str) -> Option<Arc<dyn TableSource>>;
+
+    /// Get the table source for a relationship type.
     fn relationship_source(&self, rel_type: &str) -> Option<Arc<dyn TableSource>>;
+
+    /// Get the relationship mapping for a given relationship type.
+    ///
+    /// Default implementation returns `None`. Override this to provide
+    /// relationship mappings from the catalog instead of config.
+    fn get_relationship_mapping(&self, _rel_type: &str) -> Option<RelationshipMapping> {
+        None
+    }
+
+    /// Get the node mapping for a given label.
+    ///
+    /// Default implementation returns `None`. Override this to provide
+    /// node mappings from the catalog instead of config.
+    fn get_node_mapping(&self, _label: &str) -> Option<NodeMapping> {
+        None
+    }
 }
 
 /// A simple in-memory catalog useful for tests and bootstrap wiring.
