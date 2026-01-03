@@ -40,16 +40,18 @@ impl DataFusionPlanner {
         };
 
         let rel_instance = ctx.next_relationship_instance(rel_type)?;
-        let Some(rel_map) = self.config.relationship_mappings.get(rel_type) else {
-            return Ok(left_plan);
+        let rel_map = match self.get_relationship_mapping(rel_type) {
+            Ok(m) => m,
+            Err(_) => return Ok(left_plan),
         };
 
         let Some(src_label) = ctx.analysis.var_to_label.get(source_variable) else {
             return Ok(left_plan);
         };
 
-        let Some(node_map) = self.config.node_mappings.get(src_label) else {
-            return Ok(left_plan);
+        let node_map = match self.get_node_mapping(src_label) {
+            Ok(m) => m,
+            Err(_) => return Ok(left_plan),
         };
 
         let Some(rel_source) = cat.relationship_source(&rel_map.relationship_type) else {
@@ -65,24 +67,19 @@ impl DataFusionPlanner {
             source_variable,
             rel_qualifier: &rel_instance.alias,
             node_id_field: &node_map.id_field,
-            rel_map,
+            rel_map: &rel_map,
             direction,
         };
         let builder = self.join_source_to_relationship(left_plan, rel_scan, &source_params)?;
 
         // Join relationship with target node using the explicit target_label
-        let target_node_map = self.config.node_mappings.get(target_label).ok_or_else(|| {
-            crate::error::GraphError::ConfigError {
-                message: format!("No mapping found for target label: {}", target_label),
-                location: snafu::Location::new(file!(), line!(), column!()),
-            }
-        })?;
+        let target_node_map = self.get_node_mapping(target_label)?;
 
         let target_params = TargetJoinParams {
             target_variable,
             rel_qualifier: &rel_instance.alias,
-            node_map: target_node_map,
-            rel_map,
+            node_map: &target_node_map,
+            rel_map: &rel_map,
             direction,
             target_properties,
         };
@@ -289,8 +286,8 @@ impl DataFusionPlanner {
             rel_scan,
             source_variable,
             &rel_instance,
-            rel_map,
-            node_map,
+            &rel_map,
+            &node_map,
             direction,
         )?;
 
@@ -306,8 +303,8 @@ impl DataFusionPlanner {
             target_scan,
             target_variable,
             &rel_instance,
-            rel_map,
-            node_map,
+            &rel_map,
+            &node_map,
             direction,
         )?;
 

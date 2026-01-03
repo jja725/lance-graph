@@ -50,6 +50,40 @@ pub struct RelationshipMapping {
     pub filter_conditions: Option<String>,
 }
 
+/// Trait for providing relationship mappings.
+///
+/// This trait abstracts the source of relationship mappings, allowing
+/// implementations to fetch mappings from configuration, catalog, or other sources.
+pub trait RelationshipMappingProvider {
+    /// Get relationship mapping for a given relationship type.
+    ///
+    /// Returns `None` if no mapping exists for the given type.
+    fn get_relationship_mapping(&self, rel_type: &str) -> Option<RelationshipMapping>;
+}
+
+/// Trait for providing node mappings.
+///
+/// This trait abstracts the source of node mappings, allowing
+/// implementations to fetch mappings from configuration, catalog, or other sources.
+pub trait NodeMappingProvider {
+    /// Get node mapping for a given label.
+    ///
+    /// Returns `None` if no mapping exists for the given label.
+    fn get_node_mapping(&self, label: &str) -> Option<NodeMapping>;
+}
+
+impl RelationshipMappingProvider for GraphConfig {
+    fn get_relationship_mapping(&self, rel_type: &str) -> Option<RelationshipMapping> {
+        self.relationship_mappings.get(rel_type).cloned()
+    }
+}
+
+impl NodeMappingProvider for GraphConfig {
+    fn get_node_mapping(&self, label: &str) -> Option<NodeMapping> {
+        self.node_mappings.get(label).cloned()
+    }
+}
+
 impl Default for GraphConfig {
     fn default() -> Self {
         Self {

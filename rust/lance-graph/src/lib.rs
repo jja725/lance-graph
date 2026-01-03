@@ -51,6 +51,8 @@ pub mod source_catalog;
 /// Maximum allowed hops for variable-length relationship expansion (e.g., *1..N)
 pub const MAX_VARIABLE_LENGTH_HOPS: u32 = 20;
 
-pub use config::{GraphConfig, NodeMapping, RelationshipMapping};
+pub use config::{
+    GraphConfig, NodeMapping, NodeMappingProvider, RelationshipMapping, RelationshipMappingProvider,
+};
 pub use error::{GraphError, Result};
 pub use query::{CypherQuery, ExecutionStrategy};

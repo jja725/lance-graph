@@ -14,13 +14,46 @@ use crate::source_catalog::GraphSourceCatalog;
 use std::sync::Arc;
 
 impl DataFusionPlanner {
-    /// Get relationship mapping from config
-    pub(crate) fn get_relationship_mapping(&self, rel_type: &str) -> Result<&RelationshipMapping> {
+    /// Get relationship mapping using the trait-based provider.
+    ///
+    /// This method first tries to get the mapping from the catalog (if available),
+    /// then falls back to the config.
+    pub(crate) fn get_relationship_mapping(&self, rel_type: &str) -> Result<RelationshipMapping> {
+        // First try catalog if available
+        if let Some(catalog) = &self.catalog {
+            if let Some(mapping) = catalog.get_relationship_mapping(rel_type) {
+                return Ok(mapping);
+            }
+        }
+
+        // Fall back to config
         self.config
-            .relationship_mappings
-            .get(rel_type)
+            .get_relationship_mapping(rel_type)
+            .cloned()
             .ok_or_else(|| crate::error::GraphError::ConfigError {
                 message: format!("No mapping found for relationship type: {}", rel_type),
+                location: snafu::Location::new(file!(), line!(), column!()),
+            })
+    }
+
+    /// Get node mapping using the trait-based provider.
+    ///
+    /// This method first tries to get the mapping from the catalog (if available),
+    /// then falls back to the config.
+    pub(crate) fn get_node_mapping(&self, label: &str) -> Result<NodeMapping> {
+        // First try catalog if available
+        if let Some(catalog) = &self.catalog {
+            if let Some(mapping) = catalog.get_node_mapping(label) {
+                return Ok(mapping);
+            }
+        }
+
+        // Fall back to config
+        self.config
+            .get_node_mapping(label)
+            .cloned()
+            .ok_or_else(|| crate::error::GraphError::ConfigError {
+                message: format!("No mapping found for node label: {}", label),
                 location: snafu::Location::new(file!(), line!(), column!()),
             })
     }
@@ -30,7 +63,7 @@ impl DataFusionPlanner {
         &self,
         ctx: &PlanningContext,
         target_variable: &str,
-    ) -> Result<(String, &NodeMapping)> {
+    ) -> Result<(String, NodeMapping)> {
         // Try to get label from analysis first
         let target_label = if let Some(label) = ctx.analysis.var_to_label.get(target_variable) {
             label.clone()
@@ -79,14 +112,7 @@ impl DataFusionPlanner {
             });
         };
 
-        let node_map = self
-            .config
-            .node_mappings
-            .get(&target_label)
-            .ok_or_else(|| crate::error::GraphError::ConfigError {
-                message: format!("No mapping found for node label: {}", target_label),
-                location: snafu::Location::new(file!(), line!(), column!()),
-            })?;
+        let node_map = self.get_node_mapping(&target_label)?;
 
         Ok((target_label, node_map))
     }
