@@ -1915,4 +1915,129 @@ mod tests {
         // We check for "p.name" which is the expected output alias
         assert!(sql.contains("p.name"));
     }
+
+    /// Test that verifies DataFusion's TopK physical operator is used for ORDER BY + LIMIT queries.
+    ///
+    /// DataFusion automatically optimizes `Limit(Sort(...))` patterns into a TopK physical
+    /// operator that uses a heap-based algorithm, avoiding full sorting of the dataset.
+    /// This provides significant performance improvements for top-K queries.
+    #[tokio::test]
+    async fn test_topk_physical_operator_is_used() {
+        use arrow_array::{Int64Array, RecordBatch, StringArray};
+        use arrow_schema::{DataType, Field, Schema};
+        use datafusion::datasource::MemTable;
+        use datafusion::execution::context::SessionContext;
+        use std::sync::Arc;
+
+        // Create test data with enough rows to make TopK optimization worthwhile
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("name", DataType::Utf8, false),
+            Field::new("score", DataType::Int64, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int64Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10])),
+                Arc::new(StringArray::from(vec![
+                    "Alice", "Bob", "Carol", "David", "Eve", "Frank", "Grace", "Henry", "Ivy",
+                    "Jack",
+                ])),
+                Arc::new(Int64Array::from(vec![85, 92, 78, 95, 88, 76, 91, 83, 89, 94])),
+            ],
+        )
+        .unwrap();
+
+        // Create SessionContext and register the table
+        let mem_table =
+            Arc::new(MemTable::try_new(schema.clone(), vec![vec![batch.clone()]]).unwrap());
+        let ctx = SessionContext::new();
+        ctx.register_table("Student", mem_table).unwrap();
+
+        // Create a query with ORDER BY and LIMIT - this should trigger TopK optimization
+        let cfg = GraphConfig::builder()
+            .with_node_label("Student", "id")
+            .build()
+            .unwrap();
+
+        let query = CypherQuery::new(
+            "MATCH (s:Student) RETURN s.name, s.score ORDER BY s.score DESC LIMIT 3",
+        )
+        .unwrap()
+        .with_config(cfg);
+
+        // Build the catalog from context
+        use crate::source_catalog::InMemoryCatalog;
+        use datafusion::datasource::DefaultTableSource;
+
+        let table_provider = ctx.table_provider("Student").await.unwrap();
+        let table_source = Arc::new(DefaultTableSource::new(table_provider));
+        let catalog = Arc::new(InMemoryCatalog::new().with_node_source("Student", table_source));
+
+        // Get the DataFusion logical plan
+        let (_logical_plan, df_logical_plan) = query.create_logical_plans(catalog).unwrap();
+
+        // Create a DataFrame and get the physical plan
+        let df = ctx
+            .execute_logical_plan(df_logical_plan)
+            .await
+            .expect("Failed to create DataFrame");
+
+        // Get the physical plan as a string using explain
+        let explain_df = df
+            .explain(false, false)
+            .expect("Failed to create explain plan");
+        let explain_batches = explain_df.collect().await.expect("Failed to collect explain");
+
+        // Convert explain output to string for inspection
+        let mut plan_string = String::new();
+        for batch in &explain_batches {
+            let plan_type = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .unwrap();
+            let plan_content = batch
+                .column(1)
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .unwrap();
+
+            for i in 0..batch.num_rows() {
+                plan_string.push_str(&format!(
+                    "{}: {}\n",
+                    plan_type.value(i),
+                    plan_content.value(i)
+                ));
+            }
+        }
+
+        println!("Physical Plan:\n{}", plan_string);
+
+        // Verify that TopK is present in the physical plan
+        // DataFusion uses "TopK" or "SortPreservingMergeExec" with fetch for this optimization
+        let has_topk = plan_string.contains("TopK")
+            || plan_string.contains("SortExec") && plan_string.contains("fetch=");
+
+        assert!(
+            has_topk,
+            "Expected TopK or Sort with fetch in physical plan, but got:\n{}",
+            plan_string
+        );
+
+        // Also verify the query executes correctly
+        let result = query.execute_with_context(ctx).await.unwrap();
+        assert_eq!(result.num_rows(), 3, "Should return exactly 3 rows");
+
+        let scores = result
+            .column(1)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+
+        // Top 3 scores should be 95, 94, 92
+        assert_eq!(scores.value(0), 95, "First score should be 95 (David)");
+        assert_eq!(scores.value(1), 94, "Second score should be 94 (Jack)");
+        assert_eq!(scores.value(2), 92, "Third score should be 92 (Bob)");
+    }
 }
