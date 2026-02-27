@@ -4,10 +4,13 @@ Lance Graph is a Cypher-capable graph query engine built in Rust with Python bin
 
 This repository contains:
 
-- `rust/lance-graph` – the Cypher-capable query engine implemented in Rust
+- `crates/lance-graph` – the Cypher-capable query engine implemented in Rust
 - `python/` – PyO3 bindings and Python packages:
   - `lance_graph` – thin wrapper around the Rust query engine
   - `knowledge_graph` – Lance-backed knowledge graph CLI, API, and utilities
+
+See `docs/project_structure.md` for the proposed workspace-based structure from
+issue #92.
 
 ## Prerequisites
 
@@ -18,7 +21,7 @@ This repository contains:
 ## Rust crate quick start
 
 ```bash
-cd rust/lance-graph
+cd crates/lance-graph
 cargo check
 cargo test
 ```
@@ -62,6 +65,65 @@ query = (
 )
 result = query.execute({"Person": people})
 print(result.to_pydict())  # {'name': ['Bob', 'David'], 'age': [34, 42]}
+```
+
+## Python example: Direct SQL query
+
+For data analytics workflows where you prefer standard SQL, use `SqlQuery` or `SqlEngine`. No `GraphConfig` is needed:
+
+```python
+import pyarrow as pa
+from lance_graph import SqlQuery, SqlEngine
+
+person = pa.table({
+    "id": [1, 2, 3],
+    "name": ["Alice", "Bob", "Carol"],
+    "age": [28, 34, 29],
+})
+
+# One-off query
+result = SqlQuery(
+    "SELECT name, age FROM person WHERE age > 30"
+).execute({"person": person})
+print(result.to_pydict())  # {'name': ['Bob'], 'age': [34]}
+
+# Multi-query with cached context
+engine = SqlEngine({"person": person})
+r1 = engine.execute("SELECT COUNT(*) AS cnt FROM person")
+r2 = engine.execute("SELECT name FROM person ORDER BY age DESC LIMIT 2")
+```
+
+## Python example: Unity Catalog integration
+
+Connect to [Unity Catalog](https://github.com/unitycatalog/unitycatalog) (OSS) to discover and query Delta Lake or Parquet tables directly:
+
+```python
+from lance_graph import UnityCatalog
+
+# Connect to Unity Catalog
+uc = UnityCatalog("http://localhost:8080/api/2.1/unity-catalog")
+
+# Browse catalog metadata
+catalogs = uc.list_catalogs()
+schemas = uc.list_schemas("unity")
+tables = uc.list_tables("unity", "default")
+table = uc.get_table("unity", "default", "marksheet")
+print(table.columns())  # [{"name": "id", "type_name": "INT", ...}, ...]
+
+# Auto-register tables (Delta + Parquet) and query via SQL
+engine = uc.create_sql_engine("unity", "default")
+result = engine.execute("SELECT * FROM marksheet WHERE mark > 80")
+print(result.to_pandas())
+
+# For cloud storage (S3, Azure, GCS), pass storage options:
+uc = UnityCatalog(
+    "http://localhost:8080/api/2.1/unity-catalog",
+    storage_options={
+        "aws_access_key_id": "...",
+        "aws_secret_access_key": "...",
+        "aws_region": "us-east-1",
+    }
+)
 ```
 
 ## Knowledge Graph CLI & API
@@ -147,7 +209,7 @@ working solely on the bindings.
   - protoc: install `protobuf-compiler` (Debian/Ubuntu: `sudo apt-get install -y protobuf-compiler`).
   - Optional: gnuplot for Criterion's gnuplot backend; otherwise the plotters backend is used.
 
-- Run (from `rust/lance-graph`):
+- Run (from `crates/lance-graph`):
 
 ```bash
 cargo bench --bench graph_execution
@@ -157,8 +219,8 @@ cargo bench --bench graph_execution -- --warm-up-time 1 --measurement-time 2 --s
 ```
 
 - Reports:
-  - Global index: `rust/lance-graph/target/criterion/report/index.html`
-  - Group index: `rust/lance-graph/target/criterion/cypher_execution/report/index.html`
+  - Global index: `crates/lance-graph/target/criterion/report/index.html`
+  - Group index: `crates/lance-graph/target/criterion/cypher_execution/report/index.html`
 
 - Typical results (x86_64, quick run: warm-up 1s, measurement 2s, sample size 10):
 

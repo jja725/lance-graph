@@ -23,29 +23,139 @@ pip install lance-graph
 import pyarrow as pa
 from lance_graph import CypherQuery, GraphConfig
 
-# Create sample data
-people = pa.table({
-    "person_id": [1, 2, 3, 4],
-    "name": ["Alice", "Bob", "Carol", "David"],
-    "age": [28, 34, 29, 42],
-})
-
-# Configure graph schema
-config = (
+cfg = (
     GraphConfig.builder()
-    .with_node_label("Person", "person_id")
+    .with_node_label("Person", "id")
+    .with_node_label("City", "id")
+    .with_relationship("lives_in", "src", "dst")
     .build()
 )
 
-# Execute Cypher query
-query = CypherQuery("MATCH (p:Person) WHERE p.age > 30 RETURN p.name, p.age")
-result = query.with_config(config).execute({"Person": people})
+datasets = {
+    "Person": pa.table({"id": [1, 2], "name": ["Alice", "Bob"]}),
+    "City": pa.table({"id": [10, 20], "name": ["London", "Sydney"]}),
+    "lives_in": pa.table({"src": [1, 2], "dst": [10, 20]}),
+}
 
-print(result.to_pydict())
-# Output: {'name': ['Bob', 'David'], 'age': [34, 42]}
+query = """
+    MATCH (p:Person)-[:lives_in]->(c:City)
+    RETURN p.name, c.name
+"""
+
+result = CypherQuery(query).with_config(cfg).execute(datasets)
+print(result.to_pylist())
+
+[{'p.name': 'Alice', 'c.name': 'London'}, {'p.name': 'Bob', 'c.name': 'Sydney'}]
 ```
 
-### 2. Build a Knowledge Graph from Text
+### 2. Multi-Query Execution with CypherEngine
+
+For executing multiple queries against the same datasets, use `CypherEngine` to cache the catalog and achieve better performance:
+
+```python
+import pyarrow as pa
+from lance_graph import CypherEngine, GraphConfig
+
+cfg = (
+    GraphConfig.builder()
+    .with_node_label("Person", "id")
+    .with_node_label("City", "id")
+    .with_relationship("lives_in", "src", "dst")
+    .build()
+)
+
+datasets = {
+    "Person": pa.table({"id": [1, 2], "name": ["Alice", "Bob"], "age": [30, 25]}),
+    "City": pa.table({"id": [10, 20], "name": ["London", "Sydney"]}),
+    "lives_in": pa.table({"src": [1, 2], "dst": [10, 20]}),
+}
+
+# Create engine once - builds catalog
+engine = CypherEngine(cfg, datasets)
+
+# Execute multiple queries efficiently - catalog is reused
+result1 = engine.execute("MATCH (p:Person) WHERE p.age > 25 RETURN p.name")
+result2 = engine.execute("MATCH (p:Person)-[:lives_in]->(c:City) RETURN p.name, c.name")
+result3 = engine.execute("MATCH (p:Person) RETURN count(*) as total")
+
+print(result1.to_pylist())
+# [{'p.name': 'Alice'}]
+```
+
+### 3. Direct SQL Queries
+
+For data analytics workflows where you prefer standard SQL over Cypher, use `SqlQuery` or `SqlEngine`. No `GraphConfig` is needed — write explicit JOINs against your tables directly:
+
+```python
+import pyarrow as pa
+from lance_graph import SqlQuery, SqlEngine
+
+person = pa.table({
+    "id": [1, 2, 3],
+    "name": ["Alice", "Bob", "Carol"],
+    "age": [28, 34, 29],
+})
+knows = pa.table({"src_id": [1, 1, 2], "dst_id": [2, 3, 3]})
+datasets = {"person": person, "knows": knows}
+
+# One-off query
+result = SqlQuery(
+    "SELECT p.name, p.age FROM person p WHERE p.age > 30"
+).execute(datasets)
+print(result.to_pylist())
+# [{'name': 'Bob', 'age': 34}]
+
+# Multi-query with cached context
+engine = SqlEngine(datasets)
+r1 = engine.execute("SELECT COUNT(*) AS cnt FROM person")
+r2 = engine.execute(
+    "SELECT p1.name AS person, p2.name AS friend "
+    "FROM person p1 "
+    "JOIN knows k ON p1.id = k.src_id "
+    "JOIN person p2 ON p2.id = k.dst_id"
+)
+```
+
+### 4. Unity Catalog Integration
+
+Connect to [Unity Catalog](https://github.com/unitycatalog/unitycatalog) (OSS) to discover and query Delta Lake or Parquet tables without manually loading data:
+
+```python
+from lance_graph import UnityCatalog
+
+# Connect to Unity Catalog
+uc = UnityCatalog("http://localhost:8080/api/2.1/unity-catalog")
+
+# Browse catalog hierarchy
+catalogs = uc.list_catalogs()
+schemas = uc.list_schemas("unity")
+tables = uc.list_tables("unity", "default")
+
+# Inspect table metadata
+table = uc.get_table("unity", "default", "marksheet")
+print(table.data_source_format)  # "Delta"
+print(table.columns())           # [{"name": "id", "type_name": "INT", ...}, ...]
+
+# Auto-register all tables and query via SQL
+engine = uc.create_sql_engine("unity", "default")
+result = engine.execute("SELECT * FROM marksheet WHERE mark > 80")
+print(result.to_pandas())
+```
+
+For tables on cloud storage (S3, Azure, GCS):
+
+```python
+uc = UnityCatalog(
+    "http://localhost:8080/api/2.1/unity-catalog",
+    storage_options={
+        "azure_storage_account_name": "myaccount",
+        "azure_storage_account_key": "...",
+    }
+)
+engine = uc.create_sql_engine("unity", "default")
+```
+
+### 5. Build a Knowledge Graph from Text
 
 ```python
 from pathlib import Path
@@ -104,7 +214,7 @@ result = kg.query("""
 print(result.to_pylist())
 ```
 
-### 3. Natural Language Q&A
+### 6. Natural Language Q&A
 
 ```python
 from knowledge_graph.llm.qa import ask_question
@@ -183,7 +293,7 @@ maturin develop
 
 ## Repository layout
 
-- `python/src/` – PyO3 bridge that exposes graph APIs to Python
+- `crates/lance-graph-python/src/` – PyO3 bridge that exposes graph APIs to Python
 - `python/python/lance_graph/` – pure-Python wrapper and `__init__`
 - `python/python/knowledge_graph/` – CLI, FastAPI, and extractor utilities built on Lance
 - `python/python/tests/` – graph-centric functional tests

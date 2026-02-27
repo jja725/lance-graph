@@ -5,10 +5,10 @@ on:
       - main
   pull_request:
     paths:
-      - rust/**
-      - .github/workflows/rust-test.yml
+      - crates/**
       - Cargo.toml
       - Cargo.lock
+      - .github/workflows/rust-test.yml
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -28,7 +28,6 @@ jobs:
       matrix:
         toolchain:
           - stable
-          - nightly
     steps:
       - uses: actions/checkout@v4
       - name: Setup rust toolchain
@@ -37,17 +36,20 @@ jobs:
           rustup default ${{ matrix.toolchain }}
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: rust/lance-graph
+          shared-key: "lance-graph-deps"
+          workspaces: |
+            crates/lance-graph
+            crates/lance-graph-python
       - name: Install dependencies
         run: |
           sudo apt update
           sudo apt install -y protobuf-compiler
       - name: Build tests
-        run: cargo test --manifest-path rust/lance-graph/Cargo.toml --no-run
+        run: cargo test --manifest-path crates/lance-graph/Cargo.toml --no-run
       - name: Run unit tests
-        run: cargo test --manifest-path rust/lance-graph/Cargo.toml --lib
+        run: cargo test --manifest-path crates/lance-graph/Cargo.toml --lib
       - name: Run doc tests
-        run: cargo test --manifest-path rust/lance-graph/Cargo.toml --doc
+        run: cargo test --manifest-path crates/lance-graph/Cargo.toml --doc
 
   test-with-coverage:
     runs-on: ubuntu-24.04
@@ -60,7 +62,10 @@ jobs:
           rustup default stable
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: rust/lance-graph
+          shared-key: "lance-graph-deps"
+          workspaces: |
+            crates/lance-graph
+            crates/lance-graph-python
       - name: Install dependencies
         run: |
           sudo apt update
@@ -69,7 +74,7 @@ jobs:
         uses: taiki-e/install-action@cargo-llvm-cov
       - name: Run tests with coverage
         run: |
-          cargo llvm-cov --manifest-path rust/lance-graph/Cargo.toml --lcov --output-path lcov.info
+          cargo llvm-cov --manifest-path crates/lance-graph/Cargo.toml --lcov --output-path lcov.info
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
         with:
